@@ -42,9 +42,21 @@ const paymentConfig = {
   payTo: PAY_TO,
 };
 
+// Devnet agent bypass — allows agents to skip x402 payment with a shared secret
+const AGENT_SECRET = process.env.AGENT_SECRET || "";
+if (AGENT_SECRET) {
+  app.use((req, _res, next) => {
+    if (req.headers["x-agent-key"] === AGENT_SECRET) {
+      (req as any).x402Bypassed = true;
+    }
+    next();
+  });
+}
+
 // x402 middleware — only POST endpoints require payment
-app.use(
-  paymentMiddleware(
+app.use((req, res, next) => {
+  if ((req as any).x402Bypassed) return next();
+  return paymentMiddleware(
     {
       "POST /place-lend-order": {
         accepts: paymentConfig,
@@ -58,8 +70,8 @@ app.use(
       },
     },
     resourceServer
-  )
-);
+  )(req, res, next);
+});
 
 // --- Routes ---
 

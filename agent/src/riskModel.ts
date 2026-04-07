@@ -1,4 +1,4 @@
-import { AgentProfile } from "./agents/types.js";
+import { AgentProfile } from "./agents/types";
 
 export interface RateQuote {
   lendRateBps: number;

@@ -261,7 +261,7 @@ export function getProgram(): anchor.Program | null {
 
   const idlPath = path.resolve(
     __dirname,
-    "../../../../target/idl/epoch_lending.json"
+    "../../../target/idl/epoch_lending.json"
   );
   try {
     const idl = JSON.parse(fs.readFileSync(idlPath, "utf-8"));

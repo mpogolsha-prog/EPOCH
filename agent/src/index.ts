@@ -3,15 +3,17 @@ import { createKeyPairSignerFromBytes } from "@solana/kit";
 import * as fs from "fs";
 import * as path from "path";
 
-import { getKaminoRate } from "./rateOracle.js";
-import { AgentProfile, AgentState } from "./agents/types.js";
-import { profile as carlProfile, runCycle as runCarl } from "./agents/conservative.js";
-import { profile as mikeProfile, runCycle as runMike } from "./agents/moderate.js";
-import { profile as aliceProfile, runCycle as runAlice } from "./agents/aggressive.js";
+import { getKaminoRate } from "./rateOracle";
+import { AgentProfile, AgentState } from "./agents/types";
+import { profile as carlProfile, runCycle as runCarl } from "./agents/conservative";
+import { profile as mikeProfile, runCycle as runMike } from "./agents/moderate";
+import { profile as aliceProfile, runCycle as runAlice } from "./agents/aggressive";
 
 const API_BASE_URL = process.env.API_BASE_URL || "http://localhost:3001";
 const CYCLE_INTERVAL = parseInt(process.env.CYCLE_INTERVAL_SECONDS || "300", 10) * 1000;
 const SOLANA_DEVNET_CAIP2 = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
+const DRY_RUN = process.env.DRY_RUN !== "false";
+const AGENT_SECRET = process.env.AGENT_SECRET || "";
 
 function resolveKeypairPath(keypairPath: string): string {
   if (keypairPath.startsWith("~")) {
@@ -32,7 +34,9 @@ function loadKeypairBytes(keypairPath: string): Uint8Array | null {
 
 async function initPaidFetch(secretKeyBytes: Uint8Array): Promise<{ paidFetch: typeof fetch; address: string } | null> {
   try {
+    // @ts-ignore — x402 packages lack type declarations
     const { wrapFetchWithPayment, x402Client } = await import("@x402/fetch");
+    // @ts-ignore
     const { ExactSvmScheme } = await import("@x402/svm");
 
     const signer = await createKeyPairSignerFromBytes(secretKeyBytes);
@@ -93,25 +97,44 @@ async function main() {
     paidFetch: typeof fetch | null;
   }> = [];
 
+  // If AGENT_SECRET is set, create an authed fetch that bypasses x402
+  const agentFetch: typeof fetch | null = (!DRY_RUN && AGENT_SECRET)
+    ? ((url: any, init?: any) => fetch(url, {
+        ...init,
+        headers: { ...init?.headers, "X-Agent-Key": AGENT_SECRET },
+      })) as typeof fetch
+    : null;
+
+  if (agentFetch) {
+    console.log("[mode] LIVE — agent secret bypass enabled");
+  }
+
   for (const { profile, run } of [
     { profile: carlProfile, run: runCarl },
     { profile: mikeProfile, run: runMike },
     { profile: aliceProfile, run: runAlice },
   ]) {
-    const secretKey = loadKeypairBytes(profile.keypairPath);
-    let paidFetch: typeof fetch | null = null;
+    let paidFetch: typeof fetch | null = agentFetch;
 
-    if (secretKey) {
-      const result = await initPaidFetch(secretKey);
-      if (result) {
-        paidFetch = result.paidFetch;
-        console.log(`[${profile.name}] Keypair loaded: ${result.address}`);
-        console.log(`[${profile.name}] x402 payment enabled`);
+    if (!paidFetch && !DRY_RUN) {
+      // Try x402 payment if no agent secret
+      const secretKey = loadKeypairBytes(profile.keypairPath);
+      if (secretKey) {
+        const result = await initPaidFetch(secretKey);
+        if (result) {
+          paidFetch = result.paidFetch;
+          console.log(`[${profile.name}] Keypair loaded: ${result.address}`);
+          console.log(`[${profile.name}] x402 payment enabled`);
+        } else {
+          console.log(`[${profile.name}] x402 unavailable \u2014 DRY RUN mode`);
+        }
       } else {
-        console.log(`[${profile.name}] x402 unavailable \u2014 DRY RUN mode`);
+        console.log(`[${profile.name}] No keypair at ${profile.keypairPath} \u2014 DRY RUN mode`);
       }
+    } else if (paidFetch) {
+      console.log(`[${profile.name}] LIVE mode`);
     } else {
-      console.log(`[${profile.name}] No keypair at ${profile.keypairPath} \u2014 DRY RUN mode`);
+      console.log(`[${profile.name}] DRY RUN mode`);
     }
 
     agents.push({ profile, run, paidFetch });
@@ -128,10 +151,13 @@ async function main() {
     const kaminoRate = await getKaminoRate();
     console.log(`[Cycle #${cycle}] Kamino USDC rate: ${formatRate(kaminoRate)}`);
 
-    // 2. Run all 3 agents in parallel
-    const states = await Promise.all(
-      agents.map((a) => a.run(a.profile, API_BASE_URL, a.paidFetch)),
-    );
+    // 2. Run agents sequentially (devnet rate limits)
+    const states: AgentState[] = [];
+    for (const a of agents) {
+      const state = await a.run(a.profile, API_BASE_URL, a.paidFetch);
+      states.push(state);
+      await new Promise((r) => setTimeout(r, 3000)); // 3s delay between agents
+    }
 
     // 3. Print dashboard
     printDashboard(kaminoRate, cycle, states);

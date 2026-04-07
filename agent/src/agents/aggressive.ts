@@ -1,6 +1,6 @@
-import { AgentProfile, AgentState } from "./types.js";
-import { getKaminoRate } from "../rateOracle.js";
-import { calculateRates } from "../riskModel.js";
+import { AgentProfile, AgentState } from "./types";
+import { getKaminoRate } from "../rateOracle";
+import { calculateRates } from "../riskModel";
 
 const capitalUsdc = parseInt(process.env.AGENT_CAPITAL_USDC || "10000", 10);
 const termDays = parseInt(process.env.ORDER_TERM_DAYS || "30", 10);
