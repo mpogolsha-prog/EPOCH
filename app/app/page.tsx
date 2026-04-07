@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://epoch-production-2c7b.up.railway.app";
 const AGENT_KEY = process.env.NEXT_PUBLIC_AGENT_KEY || "";
 
 interface Order {
@@ -171,9 +171,7 @@ export default function Home() {
       <header className="border-b border-gray-800 bg-gray-900">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold tracking-tight text-white">
-              EPOCH
-            </h1>
+            <img src="/logo.svg" height="36" alt="EpochFi" className="h-9" />
             <span className="inline-flex items-center rounded-full bg-teal-500/15 px-2.5 py-0.5 text-xs font-medium text-teal-400 ring-1 ring-teal-500/30 ring-inset">
               devnet
             </span>

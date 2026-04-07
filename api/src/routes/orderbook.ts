@@ -20,6 +20,13 @@ function formatRate(bps: number): string {
 
 // --- Agent identification ---
 
+// Hardcoded agent pubkeys — works on Railway without keypair files
+const KNOWN_AGENT_PUBKEYS: Record<string, string> = {
+  "4Vsg221kqEZ5Urasw4z8RotPL4qj1DrSEoxg4x2csWYJ": "Carl",
+  "7MoVhsoHtkP88R3qEZ6A5WhVhCXod3wxfsFDhJ3y91kf": "Mike",
+  "2AtJzz4gyHTtrusx4DiAotxmARyi7SvxVNdKbW6yCrvm": "Alice",
+};
+
 interface AgentInfo {
   name: string;
   pubkey: string;
@@ -44,18 +51,19 @@ const AGENT_DEFS = [
   { name: "Alice", envKey: "ALICE_KEYPAIR_PATH", default: "~/.config/solana/alice.json" },
 ];
 
-const AGENTS: AgentInfo[] = [];
+// Build agent lookup: try keypair files first, fall back to hardcoded pubkeys
+const agentPubkeyToName = new Map<string, string>(
+  Object.entries(KNOWN_AGENT_PUBKEYS)
+);
 for (const def of AGENT_DEFS) {
   const pubkey = loadAgentPubkey(process.env[def.envKey] || def.default);
-  if (pubkey) AGENTS.push({ name: def.name, pubkey });
+  if (pubkey) agentPubkeyToName.set(pubkey, def.name);
 }
-
-const agentPubkeyToName = new Map(AGENTS.map((a) => [a.pubkey, a.name]));
 
 // Server keypair (seed script deployer) — seed orders use this as owner
 const serverPubkey = loadAgentPubkey(
   process.env.SERVER_KEYPAIR_PATH || "~/.config/solana/id.json"
-);
+) || "Au3M7Gp2k9Xh93WiaTot71QRSJBhdHo8wedwAsv6NNBa";
 
 // Agent rate profiles: seed orders at these rates map to agent personas
 const AGENT_RATE_PROFILES: Record<number, string> = {
@@ -70,7 +78,7 @@ function getAgentInfo(owner: string, rateBps: number): { source: "agent" | "user
     return { source: "agent", agentName: agentPubkeyToName.get(owner)! };
   }
   // Seed match: order placed by server at an agent rate profile
-  if (owner === serverPubkey && AGENT_RATE_PROFILES[rateBps]) {
+  if (serverPubkey && owner === serverPubkey && AGENT_RATE_PROFILES[rateBps]) {
     return { source: "agent", agentName: AGENT_RATE_PROFILES[rateBps] };
   }
   return { source: "user", agentName: null };

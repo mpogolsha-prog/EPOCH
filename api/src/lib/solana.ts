@@ -235,6 +235,20 @@ let _serverKeypair: Keypair | null | undefined;
 export function getServerKeypair(): Keypair | null {
   if (_serverKeypair !== undefined) return _serverKeypair;
 
+  // Option 1: JSON string in env var (for Railway / cloud deploys)
+  const keypairJson = process.env.SERVER_KEYPAIR;
+  if (keypairJson) {
+    try {
+      const raw = JSON.parse(keypairJson);
+      _serverKeypair = Keypair.fromSecretKey(Uint8Array.from(raw));
+      return _serverKeypair;
+    } catch {
+      _serverKeypair = null;
+      return null;
+    }
+  }
+
+  // Option 2: file path (for local dev)
   const keypairPath = process.env.SERVER_KEYPAIR_PATH;
   if (!keypairPath) {
     _serverKeypair = null;
@@ -259,12 +273,21 @@ export function getProgram(): anchor.Program | null {
     return null;
   }
 
-  const idlPath = path.resolve(
-    __dirname,
-    "../../../target/idl/epoch_lending.json"
-  );
   try {
-    const idl = JSON.parse(fs.readFileSync(idlPath, "utf-8"));
+    let idl: any;
+
+    // Option 1: IDL as env var (JSON string)
+    if (process.env.EPOCH_IDL) {
+      idl = JSON.parse(process.env.EPOCH_IDL);
+    } else {
+      // Option 2: bundled IDL at api/idl/ (works locally and on Railway)
+      const bundledPath = path.resolve(__dirname, "../../idl/epoch_lending.json");
+      // Option 3: repo root target/ (local dev fallback)
+      const repoPath = path.resolve(__dirname, "../../../target/idl/epoch_lending.json");
+      const idlPath = fs.existsSync(bundledPath) ? bundledPath : repoPath;
+      idl = JSON.parse(fs.readFileSync(idlPath, "utf-8"));
+    }
+
     const wallet = new anchor.Wallet(keypair);
     const provider = new anchor.AnchorProvider(connection, wallet, {
       commitment: "confirmed",
