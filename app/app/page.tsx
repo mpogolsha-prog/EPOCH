@@ -1,9 +1,24 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
+import { useWallet, useAnchorWallet } from "@solana/wallet-adapter-react";
+import { Connection, PublicKey } from "@solana/web3.js";
+import { AnchorProvider, Program, BN } from "@coral-xyz/anchor";
+import { getAssociatedTokenAddress } from "@solana/spl-token";
+import idl from "@/lib/idl.json";
+
+const WalletMultiButton = dynamic(
+  () =>
+    import("@solana/wallet-adapter-react-ui").then(
+      (m) => m.WalletMultiButton
+    ),
+  { ssr: false }
+);
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://epoch-production-2c7b.up.railway.app";
-const AGENT_KEY = process.env.NEXT_PUBLIC_AGENT_KEY || "";
+const DEVNET_RPC = "https://api.devnet.solana.com";
+const PROGRAM_ID = new PublicKey(idl.address);
 
 interface Order {
   pubkey: string;
@@ -29,6 +44,16 @@ interface OrderbookData {
   bestLendRate: string | null;
   bestBorrowRate: string | null;
   spreadBps: number | null;
+  market: {
+    pubkey: string;
+    usdcMint: string;
+    collateralRatioBps: number;
+    liquidationThresholdBps: number;
+    protocolFeeBps: number;
+    activeLendOrders: number;
+    activeBorrowOrders: number;
+    activeLoans: number;
+  } | null;
 }
 
 function formatUSDC(rawAmount: number): string {
@@ -57,27 +82,19 @@ function SourceBadge({ order }: { order: Order }) {
   );
 }
 
-interface PlaceOrderResult {
-  success: boolean;
-  txSignature?: string;
-  message: string;
-  explorer?: string;
-  error?: string;
-}
-
-const TERMS = [7, 14, 30] as const;
-
 export default function Home() {
   const [data, setData] = useState<OrderbookData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  // Place order form state
+  // Order form state
   const [orderAmount, setOrderAmount] = useState("");
-  const [orderTerm, setOrderTerm] = useState<number>(30);
   const [orderRate, setOrderRate] = useState("");
-  const [orderSubmitting, setOrderSubmitting] = useState(false);
-  const [orderResult, setOrderResult] = useState<PlaceOrderResult | null>(null);
+  const [orderStatus, setOrderStatus] = useState<string | null>(null);
+  const [orderLoading, setOrderLoading] = useState(false);
+
+  const { publicKey, sendTransaction } = useWallet();
+  const anchorWallet = useAnchorWallet();
 
   useEffect(() => {
     async function fetchOrderbook() {
@@ -98,60 +115,109 @@ export default function Home() {
     return () => clearInterval(interval);
   }, []);
 
-  async function handlePlaceOrder(e: FormEvent) {
+  async function handlePlaceOrder(e: React.FormEvent) {
     e.preventDefault();
-    setOrderResult(null);
+    setOrderStatus(null);
+
+    if (!publicKey || !anchorWallet) {
+      setOrderStatus("Connect your wallet to place orders.");
+      return;
+    }
+
+    if (!data?.market) {
+      setOrderStatus("Market data not available. Please try again.");
+      return;
+    }
 
     const amountUsdc = parseFloat(orderAmount);
     const ratePct = parseFloat(orderRate);
-
-    if (!amountUsdc || amountUsdc <= 0) {
-      setOrderResult({ success: false, message: "Enter a valid amount" });
+    if (isNaN(amountUsdc) || amountUsdc <= 0) {
+      setOrderStatus("Enter a valid amount.");
       return;
     }
-    if (!ratePct || ratePct <= 0) {
-      setOrderResult({ success: false, message: "Enter a valid rate" });
+    if (isNaN(ratePct) || ratePct <= 0) {
+      setOrderStatus("Enter a valid rate.");
       return;
     }
 
-    setOrderSubmitting(true);
+    setOrderLoading(true);
+
     try {
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (AGENT_KEY) headers["x-agent-key"] = AGENT_KEY;
-
-      const res = await fetch(`${API_BASE}/place-lend-order`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          amount: Math.round(amountUsdc * 1e6),
-          minRateBps: Math.round(ratePct * 100),
-          termDays: orderTerm,
-        }),
+      const connection = new Connection(DEVNET_RPC, "confirmed");
+      const provider = new AnchorProvider(connection, anchorWallet, {
+        commitment: "confirmed",
       });
-      const json = await res.json();
+      const program = new Program(idl as any, provider);
 
-      if (res.ok && json.success) {
-        setOrderResult({
-          success: true,
-          txSignature: json.txSignature,
-          message: json.message,
-          explorer: json.explorer,
-        });
-        setOrderAmount("");
-        setOrderRate("");
-      } else {
-        setOrderResult({
-          success: false,
-          message: json.message || json.error || `HTTP ${res.status}`,
-        });
-      }
-    } catch (err) {
-      setOrderResult({
-        success: false,
-        message: err instanceof Error ? err.message : "Network error",
-      });
+      const marketPubkey = new PublicKey(data.market.pubkey);
+      const usdcMint = new PublicKey(data.market.usdcMint);
+
+      // Amount in USDC base units (6 decimals)
+      const amountBn = new BN(Math.round(amountUsdc * 1e6));
+      // Rate in basis points (e.g., 8.5% -> 850)
+      const minRateBps = Math.round(ratePct * 100);
+
+      // Derive lender's USDC ATA
+      const lenderUsdcAccount = await getAssociatedTokenAddress(
+        usdcMint,
+        publicKey
+      );
+
+      // Derive vault USDC account (ATA of market PDA, allowOwnerOffCurve)
+      const vaultUsdcAccount = await getAssociatedTokenAddress(
+        usdcMint,
+        marketPubkey,
+        true // allowOwnerOffCurve
+      );
+
+      // Fetch market to get nextOrderId for PDA derivation
+      const marketAccount = await (program.account as any).market.fetch(
+        marketPubkey
+      );
+      const nextOrderId = marketAccount.nextOrderId as BN;
+
+      // Derive lendOrder PDA
+      const [lendOrderPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("lend_order"),
+          marketPubkey.toBuffer(),
+          publicKey.toBuffer(),
+          nextOrderId.toArrayLike(Buffer, "le", 8),
+        ],
+        PROGRAM_ID
+      );
+
+      // Build the transaction
+      const tx = await program.methods
+        .placeLendOrder(amountBn, minRateBps)
+        .accounts({
+          lendOrder: lendOrderPda,
+          market: marketPubkey,
+          lenderUsdcAccount,
+          vaultUsdcAccount,
+          lender: publicKey,
+        })
+        .transaction();
+
+      // Send via wallet adapter (Phantom signs)
+      const signature = await sendTransaction(tx, connection);
+
+      // Wait for confirmation
+      await connection.confirmTransaction(signature, "confirmed");
+
+      setOrderStatus(
+        `Order placed! Signature: ${signature.slice(0, 8)}... — ` +
+          `https://explorer.solana.com/tx/${signature}?cluster=devnet`
+      );
+      setOrderAmount("");
+      setOrderRate("");
+    } catch (err: any) {
+      console.error("Place order error:", err);
+      const msg =
+        err?.message || err?.toString() || "Transaction failed";
+      setOrderStatus(`Error: ${msg}`);
     } finally {
-      setOrderSubmitting(false);
+      setOrderLoading(false);
     }
   }
 
@@ -176,12 +242,7 @@ export default function Home() {
               devnet
             </span>
           </div>
-          <button
-            disabled
-            className="rounded-lg bg-gray-800 px-4 py-2 text-sm font-medium text-gray-400 cursor-not-allowed"
-          >
-            Connect Wallet
-          </button>
+          <WalletMultiButton />
         </div>
       </header>
 
@@ -214,92 +275,65 @@ export default function Home() {
           />
         </div>
 
-        {/* Place Lend Order */}
+        {/* Place Lend Order form */}
         <div className="rounded-xl border border-gray-800 bg-gray-900 px-6 py-5">
           <h2 className="text-lg font-semibold text-white mb-4">
             Place Lend Order
           </h2>
-          <form onSubmit={handlePlaceOrder} className="flex flex-wrap items-end gap-4">
-            <div className="flex-1 min-w-[140px]">
-              <label className="block text-xs text-gray-500 mb-1">
-                Amount (USDC)
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                placeholder="1000"
-                value={orderAmount}
-                onChange={(e) => setOrderAmount(e.target.value)}
-                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-teal-500 focus:outline-none"
-              />
-            </div>
-
-            <div className="min-w-[120px]">
-              <label className="block text-xs text-gray-500 mb-1">Term</label>
-              <div className="flex rounded-lg border border-gray-700 overflow-hidden">
-                {TERMS.map((t) => (
-                  <button
-                    key={t}
-                    type="button"
-                    onClick={() => setOrderTerm(t)}
-                    className={`px-3 py-2 text-sm font-medium transition-colors ${
-                      orderTerm === t
-                        ? "bg-teal-500/20 text-teal-400"
-                        : "bg-gray-800 text-gray-400 hover:bg-gray-700"
-                    }`}
-                  >
-                    {t}d
-                  </button>
-                ))}
+          <form onSubmit={handlePlaceOrder} className="space-y-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">
+                  Amount (USDC)
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  min="0"
+                  placeholder="100"
+                  value={orderAmount}
+                  onChange={(e) => setOrderAmount(e.target.value)}
+                  className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:border-teal-500 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">
+                  Min Rate (% APY)
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  min="0"
+                  placeholder="8.0"
+                  value={orderRate}
+                  onChange={(e) => setOrderRate(e.target.value)}
+                  className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:border-teal-500 focus:outline-none"
+                />
               </div>
             </div>
-
-            <div className="flex-1 min-w-[120px]">
-              <label className="block text-xs text-gray-500 mb-1">
-                Min Rate (%)
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                placeholder="2.50"
-                value={orderRate}
-                onChange={(e) => setOrderRate(e.target.value)}
-                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-teal-500 focus:outline-none"
-              />
-            </div>
-
             <button
               type="submit"
-              disabled={orderSubmitting}
-              className="rounded-lg bg-teal-600 px-5 py-2 text-sm font-medium text-white hover:bg-teal-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              disabled={!publicKey || orderLoading}
+              className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              {orderSubmitting ? "Submitting..." : "Place Order via x402"}
+              {orderLoading
+                ? "Placing Order..."
+                : publicKey
+                  ? "Place Order"
+                  : "Connect Wallet to Place Orders"}
             </button>
+            {orderStatus && (
+              <p
+                className={`text-sm ${
+                  orderStatus.startsWith("Error")
+                    ? "text-red-400"
+                    : "text-green-400"
+                }`}
+              >
+                {orderStatus}
+              </p>
+            )}
           </form>
-
-          {orderResult && (
-            <div
-              className={`mt-4 rounded-lg border px-4 py-3 text-sm ${
-                orderResult.success
-                  ? "border-green-500/30 bg-green-500/10 text-green-400"
-                  : "border-red-500/30 bg-red-500/10 text-red-400"
-              }`}
-            >
-              <p>{orderResult.message}</p>
-              {orderResult.explorer && (
-                <a
-                  href={orderResult.explorer}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-1 inline-block text-xs text-teal-400 underline hover:text-teal-300"
-                >
-                  View on Solana Explorer
-                </a>
-              )}
-            </div>
-          )}
         </div>
 
         {/* Orderbook table */}
@@ -329,7 +363,7 @@ export default function Home() {
               <tbody className="divide-y divide-gray-800/50">
                 {allOrders.length > 0 ? (
                   allOrders.map((order) => {
-                    const rateStr = order.minRate ?? order.maxRate ?? "—";
+                    const rateStr = order.minRate ?? order.maxRate ?? "\u2014";
                     const side = order.minRateBps !== undefined ? "lend" : "borrow";
                     return (
                       <tr

@@ -1,1 +1,9 @@
 @import "tailwindcss";
+
+.wallet-adapter-button {
+  background-color: rgb(31, 41, 55) !important;
+  font-size: 0.875rem !important;
+  border-radius: 0.5rem !important;
+  height: auto !important;
+  padding: 0.5rem 1rem !important;
+}
