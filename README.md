@@ -4,6 +4,12 @@
 
 **Colosseum Frontier Hackathon 2026 | DeFi Track**
 
+## Live Demo
+
+- **Dashboard**: https://epochfi.vercel.app
+- **API**: https://epoch-production-2c7b.up.railway.app/orderbook/30d
+- **Solana Explorer**: https://explorer.solana.com/address/6UR3o2WprrTuvWU1sXywtTixcAJCRsKt1W9Eeg7gYLwk?cluster=devnet
+
 ## What is EPOCH?
 
 EPOCH is an orderbook-based fixed-rate lending protocol on Solana. Lenders post offers ("I lend 10K USDC at 8% for 30 days"), borrowers post bids with SOL collateral, and orders match on-chain when rates cross. AI agents provide liquidity 24/7 via the x402 micropayment protocol, solving the cold-start problem that plagues every new lending market.
@@ -178,7 +184,7 @@ npx ts-node scripts/setup-devnet.ts
 
 - **Program:** `6UR3o2WprrTuvWU1sXywtTixcAJCRsKt1W9Eeg7gYLwk`
 - **30d Market PDA:** `5grnWHkssgAub1juV3WHufR3xdpSLi1THDRYhhy23xyL`
-- **API:** `http://localhost:3001/orderbook/30d`
+- **API:** `https://epoch-production-2c7b.up.railway.app/orderbook/30d`
 
 ## License
 
