@@ -1,4 +1,7 @@
 import { Router, Request, Response } from "express";
+import { Keypair } from "@solana/web3.js";
+import fs from "fs";
+import path from "path";
 import {
   fetchAllMarkets,
   fetchLendOrders,
@@ -13,6 +16,64 @@ const STATUS_OPEN = 0;
 
 function formatRate(bps: number): string {
   return `${(bps / 100).toFixed(2)}%`;
+}
+
+// --- Agent identification ---
+
+interface AgentInfo {
+  name: string;
+  pubkey: string;
+}
+
+function loadAgentPubkey(keypairPath: string): string | null {
+  try {
+    const resolved = keypairPath.startsWith("~")
+      ? path.join(process.env.HOME || "", keypairPath.slice(1))
+      : path.resolve(keypairPath);
+    const raw = JSON.parse(fs.readFileSync(resolved, "utf-8"));
+    const kp = Keypair.fromSecretKey(Uint8Array.from(raw));
+    return kp.publicKey.toBase58();
+  } catch {
+    return null;
+  }
+}
+
+const AGENT_DEFS = [
+  { name: "Carl", envKey: "CARL_KEYPAIR_PATH", default: "~/.config/solana/carl.json" },
+  { name: "Mike", envKey: "MIKE_KEYPAIR_PATH", default: "~/.config/solana/mike.json" },
+  { name: "Alice", envKey: "ALICE_KEYPAIR_PATH", default: "~/.config/solana/alice.json" },
+];
+
+const AGENTS: AgentInfo[] = [];
+for (const def of AGENT_DEFS) {
+  const pubkey = loadAgentPubkey(process.env[def.envKey] || def.default);
+  if (pubkey) AGENTS.push({ name: def.name, pubkey });
+}
+
+const agentPubkeyToName = new Map(AGENTS.map((a) => [a.pubkey, a.name]));
+
+// Server keypair (seed script deployer) — seed orders use this as owner
+const serverPubkey = loadAgentPubkey(
+  process.env.SERVER_KEYPAIR_PATH || "~/.config/solana/id.json"
+);
+
+// Agent rate profiles: seed orders at these rates map to agent personas
+const AGENT_RATE_PROFILES: Record<number, string> = {
+  281: "Carl",   // Conservative: +75bps
+  256: "Mike",   // Moderate: +50bps
+  231: "Alice",  // Aggressive: +25bps
+};
+
+function getAgentInfo(owner: string, rateBps: number): { source: "agent" | "user"; agentName: string | null } {
+  // Direct match: order placed by a running agent
+  if (agentPubkeyToName.has(owner)) {
+    return { source: "agent", agentName: agentPubkeyToName.get(owner)! };
+  }
+  // Seed match: order placed by server at an agent rate profile
+  if (owner === serverPubkey && AGENT_RATE_PROFILES[rateBps]) {
+    return { source: "agent", agentName: AGENT_RATE_PROFILES[rateBps] };
+  }
+  return { source: "user", agentName: null };
 }
 
 // GET /orderbook/:term — FREE, reads real on-chain data via getProgramAccounts
@@ -118,6 +179,7 @@ router.get("/:term", async (req: Request, res: Response) => {
 });
 
 function formatLendOrder(o: DeserializedLendOrder) {
+  const { source, agentName } = getAgentInfo(o.owner, o.minRateBps);
   return {
     pubkey: o.pubkey,
     owner: o.owner,
@@ -127,10 +189,13 @@ function formatLendOrder(o: DeserializedLendOrder) {
     minRate: formatRate(o.minRateBps),
     orderId: o.orderId,
     createdAt: new Date(o.createdAt * 1000).toISOString(),
+    source,
+    agentName,
   };
 }
 
 function formatBorrowOrder(o: DeserializedBorrowOrder) {
+  const { source, agentName } = getAgentInfo(o.owner, o.maxRateBps);
   return {
     pubkey: o.pubkey,
     owner: o.owner,
@@ -142,6 +207,8 @@ function formatBorrowOrder(o: DeserializedBorrowOrder) {
     collateralSol: o.collateralAmount / 1e9,
     orderId: o.orderId,
     createdAt: new Date(o.createdAt * 1000).toISOString(),
+    source,
+    agentName,
   };
 }
 

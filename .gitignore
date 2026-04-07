@@ -15,6 +15,10 @@ test-ledger/
 .keys/
 wallets/
 
+# Next.js
+app/.next/
+app/out/
+
 # Misc
 .DS_Store
 *.log
