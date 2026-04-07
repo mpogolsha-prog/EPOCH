@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <rect width="100" height="100" rx="20" fill="#0a1628"/>
+  <text
+    x="50"
+    y="72"
+    font-family="'Outfit', sans-serif"
+    font-weight="900"
+    font-size="68"
+    fill="#1D9E75"
+    text-anchor="middle"
+    letter-spacing="-2">E</text>
+</svg>

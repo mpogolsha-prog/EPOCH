@@ -1,0 +1,24 @@
+{
+  "name": "@epoch-fi/reference-agent",
+  "version": "0.1.0",
+  "description": "EPOCH reference agent — 3 AI market makers with different risk profiles",
+  "private": true,
+  "scripts": {
+    "dev": "ts-node src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@solana/kit": "^5.1.0",
+    "@x402/fetch": "^2.9.0",
+    "@x402/svm": "^2.9.0",
+    "@x402/core": "^2.9.0",
+    "axios": "^1.7.0",
+    "dotenv": "^16.6.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.3"
+  }
+}
