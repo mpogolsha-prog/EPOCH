@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+const AGENT_KEY = process.env.NEXT_PUBLIC_AGENT_KEY || "";
 
 interface Order {
   pubkey: string;
@@ -56,10 +57,27 @@ function SourceBadge({ order }: { order: Order }) {
   );
 }
 
+interface PlaceOrderResult {
+  success: boolean;
+  txSignature?: string;
+  message: string;
+  explorer?: string;
+  error?: string;
+}
+
+const TERMS = [7, 14, 30] as const;
+
 export default function Home() {
   const [data, setData] = useState<OrderbookData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  // Place order form state
+  const [orderAmount, setOrderAmount] = useState("");
+  const [orderTerm, setOrderTerm] = useState<number>(30);
+  const [orderRate, setOrderRate] = useState("");
+  const [orderSubmitting, setOrderSubmitting] = useState(false);
+  const [orderResult, setOrderResult] = useState<PlaceOrderResult | null>(null);
 
   useEffect(() => {
     async function fetchOrderbook() {
@@ -79,6 +97,63 @@ export default function Home() {
     const interval = setInterval(fetchOrderbook, 10_000);
     return () => clearInterval(interval);
   }, []);
+
+  async function handlePlaceOrder(e: FormEvent) {
+    e.preventDefault();
+    setOrderResult(null);
+
+    const amountUsdc = parseFloat(orderAmount);
+    const ratePct = parseFloat(orderRate);
+
+    if (!amountUsdc || amountUsdc <= 0) {
+      setOrderResult({ success: false, message: "Enter a valid amount" });
+      return;
+    }
+    if (!ratePct || ratePct <= 0) {
+      setOrderResult({ success: false, message: "Enter a valid rate" });
+      return;
+    }
+
+    setOrderSubmitting(true);
+    try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (AGENT_KEY) headers["x-agent-key"] = AGENT_KEY;
+
+      const res = await fetch(`${API_BASE}/place-lend-order`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          amount: Math.round(amountUsdc * 1e6),
+          minRateBps: Math.round(ratePct * 100),
+          termDays: orderTerm,
+        }),
+      });
+      const json = await res.json();
+
+      if (res.ok && json.success) {
+        setOrderResult({
+          success: true,
+          txSignature: json.txSignature,
+          message: json.message,
+          explorer: json.explorer,
+        });
+        setOrderAmount("");
+        setOrderRate("");
+      } else {
+        setOrderResult({
+          success: false,
+          message: json.message || json.error || `HTTP ${res.status}`,
+        });
+      }
+    } catch (err) {
+      setOrderResult({
+        success: false,
+        message: err instanceof Error ? err.message : "Network error",
+      });
+    } finally {
+      setOrderSubmitting(false);
+    }
+  }
 
   const allOrders = data
     ? [...data.lendOrders, ...data.borrowOrders]
@@ -139,6 +214,94 @@ export default function Home() {
             label="Agent Orders"
             value={data ? String(agentOrderCount) : "\u2014"}
           />
+        </div>
+
+        {/* Place Lend Order */}
+        <div className="rounded-xl border border-gray-800 bg-gray-900 px-6 py-5">
+          <h2 className="text-lg font-semibold text-white mb-4">
+            Place Lend Order
+          </h2>
+          <form onSubmit={handlePlaceOrder} className="flex flex-wrap items-end gap-4">
+            <div className="flex-1 min-w-[140px]">
+              <label className="block text-xs text-gray-500 mb-1">
+                Amount (USDC)
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="1000"
+                value={orderAmount}
+                onChange={(e) => setOrderAmount(e.target.value)}
+                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-teal-500 focus:outline-none"
+              />
+            </div>
+
+            <div className="min-w-[120px]">
+              <label className="block text-xs text-gray-500 mb-1">Term</label>
+              <div className="flex rounded-lg border border-gray-700 overflow-hidden">
+                {TERMS.map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setOrderTerm(t)}
+                    className={`px-3 py-2 text-sm font-medium transition-colors ${
+                      orderTerm === t
+                        ? "bg-teal-500/20 text-teal-400"
+                        : "bg-gray-800 text-gray-400 hover:bg-gray-700"
+                    }`}
+                  >
+                    {t}d
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex-1 min-w-[120px]">
+              <label className="block text-xs text-gray-500 mb-1">
+                Min Rate (%)
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="2.50"
+                value={orderRate}
+                onChange={(e) => setOrderRate(e.target.value)}
+                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-teal-500 focus:outline-none"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={orderSubmitting}
+              className="rounded-lg bg-teal-600 px-5 py-2 text-sm font-medium text-white hover:bg-teal-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {orderSubmitting ? "Submitting..." : "Place Order via x402"}
+            </button>
+          </form>
+
+          {orderResult && (
+            <div
+              className={`mt-4 rounded-lg border px-4 py-3 text-sm ${
+                orderResult.success
+                  ? "border-green-500/30 bg-green-500/10 text-green-400"
+                  : "border-red-500/30 bg-red-500/10 text-red-400"
+              }`}
+            >
+              <p>{orderResult.message}</p>
+              {orderResult.explorer && (
+                <a
+                  href={orderResult.explorer}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-1 inline-block text-xs text-teal-400 underline hover:text-teal-300"
+                >
+                  View on Solana Explorer
+                </a>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Orderbook table */}
