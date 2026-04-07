@@ -1,12 +1,20 @@
-.anchor
-.DS_Store
-target
-**/*.rs.bk
-node_modules
-test-ledger
-.yarn
-.env
+# Rust/Anchor
+target/
+.anchor/
+**/*.so
+**/*.keypair
+
+# Node
+node_modules/
 dist/
+.env
+*.env.local
+
+# Solana
+test-ledger/
+.keys/
+wallets/
+
+# Misc
+.DS_Store
 *.log
-agent/node_modules
-api/node_modules
